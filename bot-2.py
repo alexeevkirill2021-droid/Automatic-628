@@ -20,6 +20,8 @@ logger = logging.getLogger("automatic628")
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
 
+BOT_USERNAME = "@supschool628bot"
+
 
 # ---------- Состояния (FSM) ----------
 class WriteMessage(StatesGroup):
@@ -220,14 +222,19 @@ async def list_incoming(message: Message):
     rows = await db.get_unseen_messages(viewer_id, limit=50)
 
     if not rows:
-        await message.answer("Новых сообщений нет.")
+        await message.answer("🔕 Новых сообщений нет.")
         return
 
     seen_ids = []
 
     for msg_id, author_id, username, text, photo_file_id, status in rows:
-        author_label = f"Аноним №{msg_id}"
-        caption = f"№{msg_id} от {author_label}\n\n{text or ''}"
+        caption = (
+            f"🎭 <b>Аноним №{msg_id}</b>\n"
+            f"┈┈┈┈┈┈┈┈┈┈┈┈\n"
+            f"{text or ''}\n"
+            f"┈┈┈┈┈┈┈┈┈┈┈┈\n\n"
+            f"для отправки анонок пиши сюда {BOT_USERNAME}"
+        )
         try:
             if photo_file_id:
                 await message.answer_photo(photo_file_id, caption=caption)
