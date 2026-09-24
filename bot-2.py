@@ -6,13 +6,13 @@ from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 
 from config import BOT_TOKEN, OWNER_ID
 import db
-from keyboards import subscriber_menu, admin_menu, message_actions, cancel_menu
+from keyboards import subscriber_menu, admin_menu, cancel_menu
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("automatic628")
@@ -24,10 +24,6 @@ dp = Dispatcher(storage=MemoryStorage())
 # ---------- Состояния (FSM) ----------
 class WriteMessage(StatesGroup):
     waiting_text = State()
-
-
-class ForwardMessage(StatesGroup):
-    waiting_target = State()
 
 
 # ---------- Вспомогательное ----------
@@ -114,9 +110,13 @@ async def cmd_grant_reveal(message: Message, command: CommandObject):
         await message.answer("Этот пользователь ещё не администратор. Сначала выполните /add_admin.")
         return
     await db.set_can_reveal(target_id, True)
-    await message.answer(f"Пользователь {target_id} теперь может видеть авторов сообщений.")
+    await message.answer(f"Пользователь {target_id} теперь может видеть авторов сообщений через /whois.")
     try:
-        await bot.send_message(target_id, "Вам открыт доступ к просмотру авторов сообщений.")
+        await bot.send_message(
+            target_id,
+            "Вам открыт доступ к просмотру авторов сообщений.\n"
+            "Используйте команду /whois <номер сообщения>, чтобы узнать, кто его написал.",
+        )
     except Exception:
         pass
 
@@ -138,7 +138,32 @@ async def cmd_revoke_reveal(message: Message, command: CommandObject):
     await message.answer(f"У пользователя {target_id} отозван доступ к просмотру авторов.")
 
 
-# ---------- Меню подписчика: написать сообщение ----------
+# ---------- /whois — узнать автора сообщения (владелец + те, кому дан доступ) ----------
+@dp.message(Command("whois"))
+async def cmd_whois(message: Message, command: CommandObject):
+    if not await is_owner_or_admin(message.from_user.id):
+        return
+    if not await db.can_reveal_author(message.from_user.id, OWNER_ID):
+        await message.answer("У вас нет доступа к просмотру авторов сообщений.")
+        return
+    if not command.args:
+        await message.answer("Использование: /whois <номер сообщения>\nНомер указан в тексте сообщения как №...")
+        return
+    try:
+        msg_id = int(command.args.strip())
+    except ValueError:
+        await message.answer("Номер должен быть числом.")
+        return
+    row = await db.get_message(msg_id)
+    if row is None:
+        await message.answer("Сообщение с таким номером не найдено.")
+        return
+    _, author_id, username, text, photo_file_id, status = row
+    author_label = f"@{username}" if username else "без username"
+    await message.answer(f"Сообщение №{msg_id} отправил: {author_label} (ID: {author_id})")
+
+
+# ---------- Написать сообщение (подписчики, админы и владелец) ----------
 @dp.message(F.text == "✍️ Написать сообщение")
 async def start_write(message: Message, state: FSMContext):
     await state.set_state(WriteMessage.waiting_text)
@@ -163,14 +188,16 @@ async def receive_photo_message(message: Message, state: FSMContext):
     photo_id = message.photo[-1].file_id
     await _save_and_notify(message, text=caption, photo_file_id=photo_id)
     await state.clear()
-    await message.answer("✅ Сообщение отправлено администраторам.", reply_markup=subscriber_menu())
+    menu = admin_menu() if await is_owner_or_admin(message.from_user.id) else subscriber_menu()
+    await message.answer("✅ Сообщение отправлено администраторам.", reply_markup=menu)
 
 
 @dp.message(WriteMessage.waiting_text, F.text)
 async def receive_text_message(message: Message, state: FSMContext):
     await _save_and_notify(message, text=message.text, photo_file_id=None)
     await state.clear()
-    await message.answer("✅ Сообщение отправлено администраторам.", reply_markup=subscriber_menu())
+    menu = admin_menu() if await is_owner_or_admin(message.from_user.id) else subscriber_menu()
+    await message.answer("✅ Сообщение отправлено администраторам.", reply_markup=menu)
 
 
 async def _save_and_notify(message: Message, text: str, photo_file_id: str | None):
@@ -182,8 +209,11 @@ async def _save_and_notify(message: Message, text: str, photo_file_id: str | Non
         admins.append(OWNER_ID)
 
     author_label = f"@{username}" if username else f"ID {message.from_user.id}"
+    sender_id = message.from_user.id
 
     for admin_id in admins:
+        if admin_id == sender_id:
+            continue  # не уведомляем автора о его же сообщении
         # Автор виден только владельцу и тем, кому явно открыт доступ (can_reveal)
         if await db.can_reveal_author(admin_id, OWNER_ID):
             label = author_label
@@ -192,61 +222,52 @@ async def _save_and_notify(message: Message, text: str, photo_file_id: str | Non
         caption = f"📨 Новое сообщение от {label} (№{msg_id})\n\n{text or ''}"
         try:
             if photo_file_id:
-                await bot.send_photo(
-                    admin_id, photo_file_id, caption=caption, reply_markup=message_actions(msg_id)
-                )
+                await bot.send_photo(admin_id, photo_file_id, caption=caption)
             else:
-                await bot.send_message(admin_id, caption, reply_markup=message_actions(msg_id))
+                await bot.send_message(admin_id, caption)
         except Exception as e:
             logger.warning(f"Не удалось отправить админу {admin_id}: {e}")
 
+    # Отправитель сразу считается просмотревшим своё же сообщение
+    await db.mark_messages_viewed(sender_id, [msg_id])
 
-# ---------- Меню админа: входящие сообщения ----------
+
+# ---------- Входящие сообщения: показывает только новые (непросмотренные) ----------
 @dp.message(F.text == "📥 Входящие сообщения")
 async def list_incoming(message: Message):
     if not await is_owner_or_admin(message.from_user.id):
         return
-    rows = await db.get_recent_messages(10)
+
+    viewer_id = message.from_user.id
+    rows = await db.get_unseen_messages(viewer_id, limit=50)
+
     if not rows:
-        await message.answer("Сообщений пока нет.")
+        await message.answer("Новых сообщений нет.")
         return
 
-    may_reveal = await db.can_reveal_author(message.from_user.id, OWNER_ID)
+    may_reveal = await db.can_reveal_author(viewer_id, OWNER_ID)
+    seen_ids = []
 
     for msg_id, author_id, username, text, photo_file_id, status in rows:
         if may_reveal:
             author_label = f"@{username}" if username else f"ID {author_id}"
         else:
             author_label = f"Аноним №{msg_id}"
-        caption = f"№{msg_id} от {author_label} [{status}]\n\n{text or ''}"
-        if photo_file_id:
-            await message.answer_photo(photo_file_id, caption=caption, reply_markup=message_actions(msg_id))
-        else:
-            await message.answer(caption, reply_markup=message_actions(msg_id))
+        caption = f"№{msg_id} от {author_label}\n\n{text or ''}"
+        try:
+            if photo_file_id:
+                await message.answer_photo(photo_file_id, caption=caption)
+            else:
+                await message.answer(caption)
+            seen_ids.append(msg_id)
+        except Exception as e:
+            logger.warning(f"Не удалось показать сообщение {msg_id}: {e}")
 
-
-@dp.message(Command("whois"))
-async def cmd_whois(message: Message, command: CommandObject):
-    if not await is_owner_or_admin(message.from_user.id):
-        return
-    if not await db.can_reveal_author(message.from_user.id, OWNER_ID):
-        await message.answer("У вас нет доступа к просмотру авторов сообщений.")
-        return
-    if not command.args:
-        await message.answer("Использование: /whois <номер сообщения>\nНомер указан в тексте сообщения как №...")
-        return
-    try:
-        msg_id = int(command.args.strip())
-    except ValueError:
-        await message.answer("Номер должен быть числом.")
-        return
-    row = await db.get_message(msg_id)
-    if row is None:
-        await message.answer("Сообщение с таким номером не найдено.")
-        return
-    _, author_id, username, text, photo_file_id, status = row
-    author_label = f"@{username}" if username else f"ID {author_id}"
-    await message.answer(f"Сообщение №{msg_id} отправил: {author_label} (ID: {author_id})")
+    await db.mark_messages_viewed(viewer_id, seen_ids)
+    await message.answer(
+        "Показаны все новые сообщения ({} шт.). Чтобы переслать сообщение дальше — "
+        "перешлите (forward) его прямо из этого чата в нужный канал или группу.".format(len(seen_ids))
+    )
 
 
 @dp.message(F.text == "👥 Список админов")
@@ -257,7 +278,7 @@ async def list_admins(message: Message):
     lines = [f"• {OWNER_ID} (владелец, видит авторов)"]
     for user_id, username, can_reveal in rows:
         label = f"@{username}" if username else str(user_id)
-        reveal_note = " — видит авторов" if can_reveal else ""
+        reveal_note = " — видит авторов (/whois)" if can_reveal else ""
         lines.append(f"• {label} (ID {user_id}){reveal_note}")
     await message.answer("Администраторы:\n" + "\n".join(lines))
 
@@ -272,14 +293,17 @@ async def help_handler(message: Message):
             "/grant_reveal <user_id> — разрешить этому админу видеть авторов сообщений\n"
             "/revoke_reveal <user_id> — забрать это право\n"
             "/whois <номер сообщения> — узнать автора конкретного сообщения\n\n"
-            "«📥 Входящие сообщения» — посмотреть и переслать сообщения от подписчиков.\n"
-            "По умолчанию все сообщения анонимны для обычных админов — видите авторов только вы, "
-            "пока не дадите /grant_reveal кому-то ещё."
+            "«📥 Входящие сообщения» — показывает только новые, ещё не просмотренные вами сообщения.\n"
+            "«✍️ Написать сообщение» — отправить сообщение остальным администраторам.\n"
+            "Чтобы переслать сообщение в канал — просто перешлите (forward) его из этого чата вручную.\n"
+            "По умолчанию все сообщения анонимны — видите авторов только вы, пока не дадите /grant_reveal."
         )
     elif await is_owner_or_admin(message.from_user.id):
         await message.answer(
-            "«📥 Входящие сообщения» — посмотреть и переслать сообщения от подписчиков.\n"
-            "Авторы сообщений скрыты, если только владелец не открыл вам доступ (/whois будет доступна)."
+            "«📥 Входящие сообщения» — показывает только новые, ещё не просмотренные вами сообщения.\n"
+            "«✍️ Написать сообщение» — отправить сообщение остальным администраторам.\n"
+            "Чтобы переслать сообщение в канал — просто перешлите (forward) его из этого чата вручную.\n"
+            "Авторы сообщений скрыты, если только владелец не открыл вам доступ через /grant_reveal."
         )
     else:
         await message.answer("Нажмите «✍️ Написать сообщение», чтобы отправить сообщение администраторам.")
@@ -295,77 +319,15 @@ async def cmd_commands(message: Message):
         "/remove_admin <code>user_id</code> — снять администратора\n"
         "/grant_reveal <code>user_id</code> — разрешить админу видеть авторов сообщений\n"
         "/revoke_reveal <code>user_id</code> — забрать это право\n"
-        "/whois <code>номер</code> — узнать автора сообщения по номеру\n"
+        "/whois <code>номер</code> — узнать автора сообщения по номеру (только у кого есть доступ)\n"
         "/commands — показать этот список ещё раз\n\n"
         "Кнопки меню:\n"
-        "«📥 Входящие сообщения» — список последних сообщений\n"
-        "«👥 Список админов» — кто назначен и у кого есть доступ к авторам\n"
-        "«ℹ️ Помощь» — краткая справка"
+        "«📥 Входящие сообщения» — только новые, ещё не просмотренные сообщения\n"
+        "«✍️ Написать сообщение» — отправить сообщение остальным администраторам\n"
+        "«👥 Список админов» — кто назначен и у кого есть доступ к /whois\n"
+        "«ℹ️ Помощь» — краткая справка\n\n"
+        "Чтобы переслать сообщение в канал/группу — просто перешлите (forward) его вручную из этого чата."
     )
-
-
-# ---------- Пересылка (инлайн-кнопка) ----------
-@dp.callback_query(F.data.startswith("fwd:"))
-async def start_forward(callback: CallbackQuery, state: FSMContext):
-    if not await is_owner_or_admin(callback.from_user.id):
-        await callback.answer("Недостаточно прав.", show_alert=True)
-        return
-    msg_id = int(callback.data.split(":")[1])
-    await state.set_state(ForwardMessage.waiting_target)
-    await state.update_data(msg_id=msg_id)
-    await callback.answer()
-    await callback.message.answer(
-        "Перешлите (forward) любое сообщение ИЗ ЦЕЛЕВОГО ЧАТА сюда, "
-        "или отправьте ID чата (например -1001234567890), куда переслать сообщение №{}.\n\n"
-        "Бот должен быть участником этого чата/канала.".format(msg_id),
-        reply_markup=cancel_menu(),
-    )
-
-
-@dp.message(ForwardMessage.waiting_target)
-async def do_forward(message: Message, state: FSMContext):
-    data = await state.get_data()
-    msg_id = data.get("msg_id")
-    if msg_id is None:
-        await state.clear()
-        return
-
-    target_chat_id = None
-    if message.forward_from_chat:
-        target_chat_id = message.forward_from_chat.id
-    elif message.text and message.text.lstrip("-").isdigit():
-        target_chat_id = int(message.text.strip())
-
-    if target_chat_id is None:
-        await message.answer(
-            "Не удалось определить целевой чат. Перешлите сообщение из чата или отправьте его числовой ID."
-        )
-        return
-
-    row = await db.get_message(msg_id)
-    if row is None:
-        await message.answer("Сообщение не найдено.")
-        await state.clear()
-        return
-
-    _, author_id, username, text, photo_file_id, status = row
-    author_label = f"@{username}" if username else f"ID {author_id}"
-    caption = f"{text or ''}\n\n— переслано от {author_label}"
-
-    try:
-        if photo_file_id:
-            await bot.send_photo(target_chat_id, photo_file_id, caption=caption)
-        else:
-            await bot.send_message(target_chat_id, caption)
-        await db.mark_forwarded(msg_id)
-        await message.answer("✅ Сообщение переслано.", reply_markup=admin_menu())
-    except Exception as e:
-        await message.answer(
-            f"❌ Не удалось переслать: {e}\n\n"
-            "Убедитесь, что бот добавлен в целевой чат/канал и имеет права отправки сообщений."
-        )
-
-    await state.clear()
 
 
 # ---------- Запуск ----------
