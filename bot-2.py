@@ -269,9 +269,7 @@ async def help_handler(message: Message):
         await message.answer(
             "Команды владельца:\n"
             "/add_admin <user_id> — назначить администратора\n"
-            "/remove_admin <user_id> — снять администратора\n"
-            "/grant_reveal <user_id> — разрешить этому админу видеть авторов сообщений\n"
-            "/revoke_reveal <user_id> — забрать это право\n\n"
+            "/remove_admin <user_id> — снять администратора\n\n"
             "«📥 Входящие сообщения» — показывает только новые, ещё не просмотренные вами сообщения.\n"
             "«✍️ Написать сообщение» — отправить сообщение остальным администраторам.\n"
             "Чтобы переслать сообщение в канал — просто перешлите (forward) его из этого чата вручную.\n"
@@ -296,8 +294,6 @@ async def cmd_commands(message: Message):
         "<b>Команды владельца бота</b>\n\n"
         "/add_admin <code>user_id</code> — назначить администратора\n"
         "/remove_admin <code>user_id</code> — снять администратора\n"
-        "/grant_reveal <code>user_id</code> — разрешить админу видеть авторов сообщений\n"
-        "/revoke_reveal <code>user_id</code> — забрать это право\n"
         "/commands — показать этот список ещё раз\n\n"
         "Кнопки меню:\n"
         "«📥 Входящие сообщения» — только новые, ещё не просмотренные сообщения\n"
@@ -320,8 +316,6 @@ async def setup_owner_commands():
         BotCommand(command="commands", description="Список всех команд владельца"),
         BotCommand(command="add_admin", description="Назначить администратора"),
         BotCommand(command="remove_admin", description="Снять администратора"),
-        BotCommand(command="grant_reveal", description="Разрешить видеть авторов сообщений"),
-        BotCommand(command="revoke_reveal", description="Забрать доступ к авторам"),
     ]
     try:
         await bot.set_my_commands(owner_commands, scope=BotCommandScopeChat(chat_id=OWNER_ID))
