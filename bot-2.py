@@ -309,7 +309,7 @@ async def setup_owner_commands():
     """Настраивает всплывающую подсказку команд в Telegram только для владельца."""
     if not OWNER_ID:
         return
-    from aiogram.types import BotCommand, BotCommandScopeChat
+    from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault
 
     owner_commands = [
         BotCommand(command="start", description="Открыть меню"),
@@ -318,6 +318,11 @@ async def setup_owner_commands():
         BotCommand(command="remove_admin", description="Снять администратора"),
     ]
     try:
+        # Сначала полностью очищаем старые команды во всех возможных областях,
+        # чтобы не оставалось "залипших" пунктов вроде grant_reveal/revoke_reveal/whois.
+        await bot.delete_my_commands(scope=BotCommandScopeChat(chat_id=OWNER_ID))
+        await bot.delete_my_commands(scope=BotCommandScopeDefault())
+        # Затем устанавливаем актуальный список только для владельца.
         await bot.set_my_commands(owner_commands, scope=BotCommandScopeChat(chat_id=OWNER_ID))
     except Exception as e:
         logger.warning(f"Не удалось настроить команды владельца: {e}")
