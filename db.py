@@ -18,6 +18,13 @@ CREATE TABLE IF NOT EXISTS messages (
     status TEXT DEFAULT 'new',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS message_views (
+    message_id INTEGER,
+    viewer_id INTEGER,
+    viewed_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (message_id, viewer_id)
+);
 """
 
 
@@ -119,6 +126,36 @@ async def get_recent_messages(limit: int = 10):
             (limit,),
         )
         return await cur.fetchall()
+
+
+async def get_unseen_messages(viewer_id: int, limit: int = 50):
+    """Сообщения, которые viewer_id ещё не просматривал (в хронологическом порядке)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """
+            SELECT m.id, m.author_id, m.author_username, m.text, m.photo_file_id, m.status
+            FROM messages m
+            WHERE NOT EXISTS (
+                SELECT 1 FROM message_views v
+                WHERE v.message_id = m.id AND v.viewer_id = ?
+            )
+            ORDER BY m.id ASC
+            LIMIT ?
+            """,
+            (viewer_id, limit),
+        )
+        return await cur.fetchall()
+
+
+async def mark_messages_viewed(viewer_id: int, message_ids: list[int]):
+    if not message_ids:
+        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.executemany(
+            "INSERT OR IGNORE INTO message_views (message_id, viewer_id) VALUES (?, ?)",
+            [(msg_id, viewer_id) for msg_id in message_ids],
+        )
+        await db.commit()
 
 
 async def mark_forwarded(msg_id: int):
