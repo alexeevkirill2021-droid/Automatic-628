@@ -110,12 +110,12 @@ async def cmd_grant_reveal(message: Message, command: CommandObject):
         await message.answer("Этот пользователь ещё не администратор. Сначала выполните /add_admin.")
         return
     await db.set_can_reveal(target_id, True)
-    await message.answer(f"Пользователь {target_id} теперь может видеть авторов сообщений через /whois.")
+    await message.answer(f"Пользователю {target_id} выдан доступ к просмотру авторов сообщений.")
     try:
         await bot.send_message(
             target_id,
-            "Вам открыт доступ к просмотру авторов сообщений.\n"
-            "Используйте команду /whois <номер сообщения>, чтобы узнать, кто его написал.",
+            "Вам открыт доступ к просмотру авторов сообщений. Обратитесь к владельцу бота, "
+            "чтобы узнать, как им пользоваться.",
         )
     except Exception:
         pass
@@ -203,32 +203,10 @@ async def receive_text_message(message: Message, state: FSMContext):
 async def _save_and_notify(message: Message, text: str, photo_file_id: str | None):
     username = message.from_user.username
     msg_id = await db.save_message(message.from_user.id, username, text, photo_file_id)
-
-    admins = await db.get_all_admins()
-    if OWNER_ID and OWNER_ID not in admins:
-        admins.append(OWNER_ID)
-
-    author_label = f"@{username}" if username else f"ID {message.from_user.id}"
     sender_id = message.from_user.id
-
-    for admin_id in admins:
-        if admin_id == sender_id:
-            continue  # не уведомляем автора о его же сообщении
-        # Автор виден только владельцу и тем, кому явно открыт доступ (can_reveal)
-        if await db.can_reveal_author(admin_id, OWNER_ID):
-            label = author_label
-        else:
-            label = f"Аноним №{msg_id}"
-        caption = f"📨 Новое сообщение от {label} (№{msg_id})\n\n{text or ''}"
-        try:
-            if photo_file_id:
-                await bot.send_photo(admin_id, photo_file_id, caption=caption)
-            else:
-                await bot.send_message(admin_id, caption)
-        except Exception as e:
-            logger.warning(f"Не удалось отправить админу {admin_id}: {e}")
-
-    # Отправитель сразу считается просмотревшим своё же сообщение
+    # Сообщение не рассылается автоматически — админы/владелец увидят его,
+    # только когда сами нажмут «📥 Входящие сообщения».
+    # Отправитель сразу считается просмотревшим своё же сообщение.
     await db.mark_messages_viewed(sender_id, [msg_id])
 
 
@@ -245,14 +223,10 @@ async def list_incoming(message: Message):
         await message.answer("Новых сообщений нет.")
         return
 
-    may_reveal = await db.can_reveal_author(viewer_id, OWNER_ID)
     seen_ids = []
 
     for msg_id, author_id, username, text, photo_file_id, status in rows:
-        if may_reveal:
-            author_label = f"@{username}" if username else f"ID {author_id}"
-        else:
-            author_label = f"Аноним №{msg_id}"
+        author_label = f"Аноним №{msg_id}"
         caption = f"№{msg_id} от {author_label}\n\n{text or ''}"
         try:
             if photo_file_id:
@@ -275,11 +249,10 @@ async def list_admins(message: Message):
     if not await is_owner_or_admin(message.from_user.id):
         return
     rows = await db.get_all_admins_detailed()
-    lines = [f"• {OWNER_ID} (владелец, видит авторов)"]
+    lines = [f"• {OWNER_ID} (владелец)"]
     for user_id, username, can_reveal in rows:
         label = f"@{username}" if username else str(user_id)
-        reveal_note = " — видит авторов (/whois)" if can_reveal else ""
-        lines.append(f"• {label} (ID {user_id}){reveal_note}")
+        lines.append(f"• {label} (ID {user_id})")
     await message.answer("Администраторы:\n" + "\n".join(lines))
 
 
@@ -291,19 +264,18 @@ async def help_handler(message: Message):
             "/add_admin <user_id> — назначить администратора\n"
             "/remove_admin <user_id> — снять администратора\n"
             "/grant_reveal <user_id> — разрешить этому админу видеть авторов сообщений\n"
-            "/revoke_reveal <user_id> — забрать это право\n"
-            "/whois <номер сообщения> — узнать автора конкретного сообщения\n\n"
+            "/revoke_reveal <user_id> — забрать это право\n\n"
             "«📥 Входящие сообщения» — показывает только новые, ещё не просмотренные вами сообщения.\n"
             "«✍️ Написать сообщение» — отправить сообщение остальным администраторам.\n"
             "Чтобы переслать сообщение в канал — просто перешлите (forward) его из этого чата вручную.\n"
-            "По умолчанию все сообщения анонимны — видите авторов только вы, пока не дадите /grant_reveal."
+            "Все сообщения показываются как «Аноним»."
         )
     elif await is_owner_or_admin(message.from_user.id):
         await message.answer(
             "«📥 Входящие сообщения» — показывает только новые, ещё не просмотренные вами сообщения.\n"
             "«✍️ Написать сообщение» — отправить сообщение остальным администраторам.\n"
             "Чтобы переслать сообщение в канал — просто перешлите (forward) его из этого чата вручную.\n"
-            "Авторы сообщений скрыты, если только владелец не открыл вам доступ через /grant_reveal."
+            "Все сообщения показываются как «Аноним»."
         )
     else:
         await message.answer("Нажмите «✍️ Написать сообщение», чтобы отправить сообщение администраторам.")
@@ -319,12 +291,11 @@ async def cmd_commands(message: Message):
         "/remove_admin <code>user_id</code> — снять администратора\n"
         "/grant_reveal <code>user_id</code> — разрешить админу видеть авторов сообщений\n"
         "/revoke_reveal <code>user_id</code> — забрать это право\n"
-        "/whois <code>номер</code> — узнать автора сообщения по номеру (только у кого есть доступ)\n"
         "/commands — показать этот список ещё раз\n\n"
         "Кнопки меню:\n"
         "«📥 Входящие сообщения» — только новые, ещё не просмотренные сообщения\n"
         "«✍️ Написать сообщение» — отправить сообщение остальным администраторам\n"
-        "«👥 Список админов» — кто назначен и у кого есть доступ к /whois\n"
+        "«👥 Список админов» — кто назначен администратором\n"
         "«ℹ️ Помощь» — краткая справка\n\n"
         "Чтобы переслать сообщение в канал/группу — просто перешлите (forward) его вручную из этого чата."
     )
@@ -344,7 +315,6 @@ async def setup_owner_commands():
         BotCommand(command="remove_admin", description="Снять администратора"),
         BotCommand(command="grant_reveal", description="Разрешить видеть авторов сообщений"),
         BotCommand(command="revoke_reveal", description="Забрать доступ к авторам"),
-        BotCommand(command="whois", description="Узнать автора сообщения по номеру"),
     ]
     try:
         await bot.set_my_commands(owner_commands, scope=BotCommandScopeChat(chat_id=OWNER_ID))
