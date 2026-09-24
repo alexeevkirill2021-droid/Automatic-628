@@ -1,9 +1,4 @@
-from aiogram.types import (
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-)
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 # --- Меню подписчика ---
 def subscriber_menu() -> ReplyKeyboardMarkup:
@@ -16,23 +11,15 @@ def subscriber_menu() -> ReplyKeyboardMarkup:
     )
 
 
-# --- Меню админа ---
+# --- Меню админа (и владельца) ---
 def admin_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📥 Входящие сообщения")],
+            [KeyboardButton(text="✍️ Написать сообщение")],
             [KeyboardButton(text="👥 Список админов"), KeyboardButton(text="ℹ️ Помощь")],
         ],
         resize_keyboard=True,
-    )
-
-
-# --- Кнопка под конкретным сообщением: переслать ---
-def message_actions(msg_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="↗️ Переслать в чат", callback_data=f"fwd:{msg_id}")],
-        ]
     )
 
 
